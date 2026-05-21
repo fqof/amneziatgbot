@@ -9,7 +9,7 @@ from typing import Callable, Any, Awaitable
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -26,8 +26,8 @@ from shared import (
     is_admin, is_allowed, fmt_bytes, fmt_handshake,
     safe_edit, delete_messages, push_side_msg, pop_side_msgs,
     find_peer_in_clients,
-    menu_text,
-    kb_main, kb_cancel, kb_confirm_create, kb_back,
+    menu_text, user_link,
+    kb_main, kb_reply_menu, kb_cancel, kb_confirm_create, kb_back,
     kb_profile_select, kb_my_profiles, kb_server_status,
     kb_user_del_confirm,
 )
@@ -38,6 +38,37 @@ logger = logging.getLogger(__name__)
 
 MAX_INPUT_LENGTH = 4096
 VPN_NAME_RE = re.compile(r"^[a-zA-Z\u0430-\u044f\u0410-\u042f\u0451\u04010-9]+$")
+
+_pending_deletes: dict[int, list[int]] = {}
+_delete_lock = asyncio.Lock()
+
+
+async def _schedule_delete(bot: Bot, chat_id: int, msg_id: int) -> None:
+    async with _delete_lock:
+        if chat_id not in _pending_deletes:
+            _pending_deletes[chat_id] = []
+        _pending_deletes[chat_id].append(msg_id)
+
+    await _flush_pending_deletes(bot, chat_id)
+
+
+async def _flush_pending_deletes(bot: Bot, chat_id: int) -> None:
+    async with _delete_lock:
+        ids = _pending_deletes.pop(chat_id, [])
+
+    if not ids:
+        return
+
+    chunk_size = 5
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i:i + chunk_size]
+        for mid in chunk:
+            try:
+                await bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
+        if i + chunk_size < len(ids):
+            await asyncio.sleep(0.05)
 
 
 class DIMiddleware(BaseMiddleware):
@@ -71,6 +102,13 @@ class ThrottlingMiddleware(BaseMiddleware):
                         await event.answer("⏳ Не так быстро, подождите…", show_alert=False)
                     except Exception:
                         pass
+                elif isinstance(event, Message):
+                    try:
+                        chat_id = event.chat.id
+                        bot = event.bot
+                        asyncio.create_task(_schedule_delete(bot, chat_id, event.message_id))
+                    except Exception:
+                        pass
                 return
             self.users[uid] = now
 
@@ -78,7 +116,6 @@ class ThrottlingMiddleware(BaseMiddleware):
 
 
 class BannedUserMiddleware(BaseMiddleware):
-
     async def __call__(self, handler, event, data):
         db: Database = data.get("db")
         uid = None
@@ -97,7 +134,9 @@ class BannedUserMiddleware(BaseMiddleware):
                         pass
                 elif isinstance(event, Message):
                     try:
-                        await event.delete()
+                        asyncio.create_task(
+                            _schedule_delete(event.bot, event.chat.id, event.message_id)
+                        )
                     except Exception:
                         pass
                 return
@@ -130,9 +169,7 @@ def validate_vpn_name(name: str) -> tuple[bool, str]:
 async def _build_main_menu(uid: int, db: Database) -> tuple[str, Any]:
     user_data = await db.get_user(uid)
     admin = is_admin(uid)
-    has_profiles = bool(user_data and user_data.get("profiles"))
-    can_create = not user_data or await db.can_create_profile(uid)
-    return menu_text(user_data), kb_main(has_profiles, can_create, admin)
+    return menu_text(user_data), kb_main(admin=admin)
 
 
 async def cmd_start(message: Message, state: FSMContext, db: Database):
@@ -140,10 +177,7 @@ async def cmd_start(message: Message, state: FSMContext, db: Database):
     if uid is None:
         return
 
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    asyncio.create_task(_schedule_delete(message.bot, message.chat.id, message.message_id))
 
     if not is_allowed(uid):
         return
@@ -162,12 +196,21 @@ async def cmd_start(message: Message, state: FSMContext, db: Database):
 
     await state.clear()
 
-    text, kb = await _build_main_menu(uid, db)
+    admin = is_admin(uid)
+    text, inline_kb = await _build_main_menu(uid, db)
+    reply_kb = kb_reply_menu(admin=admin)
+
     sent = await message.answer(
         f"👋 Привет, <b>{html.escape(message.from_user.first_name or '')}</b>!\n\n{text}",
-        reply_markup=kb,
+        reply_markup=inline_kb,
         parse_mode="HTML",
     )
+    try:
+        tmp = await message.answer(".", reply_markup=reply_kb, parse_mode="HTML")
+        await tmp.delete()
+    except Exception:
+        pass
+
     await state.update_data(menu_msg_id=sent.message_id)
 
 
@@ -175,15 +218,33 @@ async def cmd_menu(message: Message, state: FSMContext, db: Database):
     await cmd_start(message, state, db)
 
 
+async def cmd_panel(message: Message, state: FSMContext, db: Database):
+    uid = message.from_user.id if message.from_user else None
+    if uid is None or not is_admin(uid):
+        return
+    asyncio.create_task(_schedule_delete(message.bot, message.chat.id, message.message_id))
+
+    from shared import kb_admin_panel
+    data = await state.get_data()
+    if old_menu := data.get("menu_msg_id"):
+        try:
+            await message.bot.delete_message(message.chat.id, old_menu)
+        except Exception:
+            pass
+    sent = await message.answer(
+        "🔧 <b>Панель управления</b>",
+        reply_markup=kb_admin_panel(),
+        parse_mode="HTML",
+    )
+    await state.update_data(menu_msg_id=sent.message_id)
+
+
 async def cmd_mykey(message: Message, db: Database):
     uid = message.from_user.id if message.from_user else None
     if uid is None or not is_allowed(uid):
         return
 
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    asyncio.create_task(_schedule_delete(message.bot, message.chat.id, message.message_id))
 
     blocked = await db.get_user_key_blocked(uid)
     if blocked:
@@ -228,10 +289,7 @@ async def cmd_newkey(message: Message, db: Database):
     if uid is None or not is_allowed(uid):
         return
 
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    asyncio.create_task(_schedule_delete(message.bot, message.chat.id, message.message_id))
 
     blocked = await db.get_user_key_blocked(uid)
     if blocked:
@@ -251,10 +309,7 @@ async def cmd_newkey(message: Message, db: Database):
 
 
 async def catch_all_messages(message: Message):
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    asyncio.create_task(_schedule_delete(message.bot, message.chat.id, message.message_id))
 
 
 async def cb_back_main(callback: CallbackQuery, state: FSMContext, db: Database):
@@ -322,10 +377,7 @@ async def process_vpn_name(message: Message, state: FSMContext, db: Database):
     chat_id = message.chat.id
     bot = message.bot
 
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    asyncio.create_task(_schedule_delete(bot, chat_id, message.message_id))
 
     data = await state.get_data()
     menu_msg_id = data.get("menu_msg_id")
@@ -401,16 +453,13 @@ async def cb_confirm_create(callback: CallbackQuery, state: FSMContext,
         await state.clear()
         await state.update_data(menu_msg_id=callback.message.message_id)
 
-        user_data = await db.get_user(uid)
         admin = is_admin(uid)
-        has_profiles = bool(user_data and user_data.get("profiles"))
-        can_create = await db.can_create_profile(uid)
 
         await safe_edit(
             callback.message,
             f"✅ <b>Профиль создан!</b>\n\nИмя: <b>{html.escape(name)}</b>\n\n"
-            f"Откройте <b>«Мои профили»</b> для просмотра конфигурации.",
-            reply_markup=kb_main(has_profiles=has_profiles, can_create=can_create, admin=admin),
+            f"Откройте приложение для просмотра конфигурации.",
+            reply_markup=kb_main(admin=admin),
         )
 
         if not is_admin(uid):
@@ -709,13 +758,11 @@ async def cb_user_del_profile_do(callback: CallbackQuery, db: Database,
 
     user_data = await db.get_user(uid)
     admin = is_admin(uid)
-    has_profiles = bool(user_data and user_data.get("profiles"))
-    can_create = await db.can_create_profile(uid)
 
     await safe_edit(
         callback.message,
         menu_text(user_data, f"✅ Профиль «{vpn_name}» удалён"),
-        reply_markup=kb_main(has_profiles=has_profiles, can_create=can_create, admin=admin),
+        reply_markup=kb_main(admin=admin),
     )
 
 
@@ -792,9 +839,14 @@ async def main():
     dp.message.register(cmd_mykey,  Command("mykey"))
     dp.message.register(cmd_newkey, Command("newkey"))
 
+    dp.message.register(cmd_start,  F.text == "🏠 Главное меню")
+    dp.message.register(cmd_panel,  F.text == "🔧 Панель управления")
+
     dp.message.register(process_vpn_name, CreateUserStates.waiting_for_name, F.text)
 
-    dp.message.register(catch_all_messages)
+    register_admin_handlers(dp)
+
+    dp.message.register(catch_all_messages, StateFilter(None))
 
     dp.callback_query.register(cb_back_main,          F.data == "back_main")
     dp.callback_query.register(cb_cancel,              F.data == "cancel")
@@ -807,8 +859,6 @@ async def main():
     dp.callback_query.register(cb_user_del_profile,    F.data.startswith("user_del_profile:") & ~F.data.startswith("user_del_profile_do:"))
     dp.callback_query.register(cb_user_del_profile_do, F.data.startswith("user_del_profile_do:"))
     dp.callback_query.register(cb_server_status,       F.data == "server_status")
-
-    register_admin_handlers(dp)
 
     async def on_startup():
         await set_bot_commands(bot)

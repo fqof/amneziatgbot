@@ -14,6 +14,9 @@ from aiogram.types import (
     Message,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    WebAppInfo,
 )
 
 from config import settings
@@ -35,10 +38,8 @@ def verify_dynamic_token(token: str, max_age_seconds: int = 300) -> bool:
     try:
         ts_str, sig = token.split('.', 1)
         ts = int(ts_str)
-
         if int(time.time()) - ts > max_age_seconds:
             return False
-
         expected_sig = hmac.new(settings.DB_ENCRYPTION_KEY.encode(), ts_str.encode('utf-8'), hashlib.sha256).hexdigest()
         return hmac.compare_digest(sig, expected_sig)
     except Exception:
@@ -48,6 +49,7 @@ def verify_dynamic_token(token: str, max_age_seconds: int = 300) -> bool:
 _ping_cache = {"ms": 0, "ts": 0}
 _PING_TTL = 180
 
+
 def get_shared_ping(host: str, api_url: str) -> int:
     now = time.monotonic()
     if _ping_cache["ms"] == 0 or (now - _ping_cache["ts"]) >= _PING_TTL:
@@ -55,7 +57,8 @@ def get_shared_ping(host: str, api_url: str) -> int:
         try:
             res = subprocess.run(["ping", "-c", "1", "-W", "2", host], capture_output=True, text=True, timeout=5)
             m = re.search(r"time=(\d+\.?\d*)\s*ms", res.stdout)
-            if m: ms = round(float(m.group(1)))
+            if m:
+                ms = round(float(m.group(1)))
         except Exception:
             pass
 
@@ -107,6 +110,11 @@ def fmt_handshake(ts: int) -> str:
     return f"{delta // 86400} д. назад"
 
 
+def user_link(tg_id: int, display: str | None = None) -> str:
+    label = html.escape(display) if display else str(tg_id)
+    return f'<a href="tg://user?id={tg_id}">{label}</a>'
+
+
 def menu_text(user_data: dict | None, notice: str = "") -> str:
     prefix = f"<i>{html.escape(notice)}</i>\n\n" if notice else ""
 
@@ -144,11 +152,17 @@ async def safe_edit(msg: Message, text: str, reply_markup=None, parse_mode=Parse
 
 
 async def delete_messages(bot: Bot, chat_id: int, msg_ids: list[int]) -> None:
-    for mid in msg_ids:
-        try:
-            await bot.delete_message(chat_id, mid)
-        except Exception:
-            pass
+    import asyncio
+    chunk_size = 5
+    for i in range(0, len(msg_ids), chunk_size):
+        chunk = msg_ids[i:i + chunk_size]
+        for mid in chunk:
+            try:
+                await bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
+        if i + chunk_size < len(msg_ids):
+            await asyncio.sleep(0.05)
 
 
 async def push_side_msg(state: FSMContext, msg_id: int) -> None:
@@ -203,37 +217,56 @@ def build_users_page_text(users_page: list[dict], page: int,
         profiles = u.get("profiles", [])
         profile_names = ", ".join(html.escape(p["vpn_name"]) for p in profiles) or "—"
         tg_id = u['telegram_id']
+        link = user_link(tg_id)
         rows.append(
-            f"{i}. <a href='tg://user?id={tg_id}'>{tg_id}</a>{banned_tag}\n"
-            f"   Профили: <b>{profile_names}</b>\n"
-            f"   С: {u.get('created_at', '—')}"
+            f"{i}. {link}{banned_tag}\n"
+            f"   📋 <b>{profile_names}</b>\n"
+            f"   🗓 {u.get('created_at', '—')}"
         )
-    body   = "\n\n".join(rows) if rows else "Список пуст."
+    body = "\n\n".join(rows) if rows else "Список пуст."
     header = (
         f"👥 <b>Пользователи</b> — {total} чел. "
         f"<i>(стр. {page + 1}/{total_pages})</i>"
     )
-    footer = "<i>👁 карточка · 🚫/✅ бан · 🗑 удалить профиль</i>"
+    footer = "<i>👁 — карточка · 🚫/✅ — бан</i>"
     return f"{header}\n\n{body}\n\n{footer}"
 
 
-def kb_main(has_profiles: bool, can_create: bool, admin: bool = False) -> InlineKeyboardMarkup:
+def kb_reply_menu(admin: bool = False) -> ReplyKeyboardMarkup:
+    miniapp_url = getattr(settings, "MINIAPP_URL", "").strip()
+
+    user_row = []
+    if miniapp_url:
+        user_row.append(
+            KeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=miniapp_url))
+        )
+    else:
+        user_row.append(KeyboardButton(text="🏠 Главное меню"))
+
+    rows = [user_row]
+
+    if admin:
+        rows.append([KeyboardButton(text="🔧 Панель управления")])
+
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, persistent=True)
+
+
+def kb_main(admin: bool = False) -> InlineKeyboardMarkup:
     rows = []
 
-    if has_profiles:
-        rows.append([
-            InlineKeyboardButton(text="👤 Мои профили",  callback_data="my_profiles"),
-            InlineKeyboardButton(text="🖥 Сервер",        callback_data="server_status"),
-        ])
-    else:
-        rows.append([
-            InlineKeyboardButton(text="🖥 Статус сервера", callback_data="server_status"),
-        ])
+    rows.append([
+        InlineKeyboardButton(
+            text="🚀 Открыть меню",
+            web_app=WebAppInfo(url="https://pgkqawg.p1zda.ru/"),
+        ),
+    ])
 
-    if can_create:
-        rows.append([
-            InlineKeyboardButton(text="🚀 Создать VPN-профиль", callback_data="create_vpn"),
-        ])
+    rows.append([
+        InlineKeyboardButton(
+            text="🟢 Telegram без VPN",
+            url="tg://proxy?server=tg.p1zda.ru&port=7443&secret=ee6728938c788a91f18307dd069c96e91b6170692e6f7a6f6e2e7275",
+        ),
+    ])
 
     if admin:
         rows.append([
@@ -336,8 +369,8 @@ def kb_cancel() -> InlineKeyboardMarkup:
 def kb_confirm_create(name: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Создать",   callback_data=f"confirm_create:{name}"),
-            InlineKeyboardButton(text="❌ Отменить",  callback_data="cancel"),
+            InlineKeyboardButton(text="✅ Создать",  callback_data=f"confirm_create:{name}"),
+            InlineKeyboardButton(text="❌ Отменить", callback_data="cancel"),
         ],
     ])
 
@@ -371,7 +404,7 @@ def kb_admin_list(users_page: list[dict], page: int, total_pages: int) -> Inline
         tg_id     = u["telegram_id"]
         rows.append([
             InlineKeyboardButton(
-                text=f"👁 ID {tg_id}",
+                text=f"👁 {tg_id}",
                 callback_data=f"admin_user_card:{tg_id}:{page}",
             ),
             InlineKeyboardButton(
@@ -438,6 +471,46 @@ def kb_user_card(tg_id: int, banned: bool, page: int, profiles: list[dict]) -> I
         InlineKeyboardButton(text="🔧 Панель", callback_data="admin_panel"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_user_card_text(u: dict, peers_info: dict | None = None) -> str:
+    tg_id = u["telegram_id"]
+    banned = u.get("banned", False)
+    profiles = u.get("profiles", [])
+    created_at = u.get("created_at", "—")
+    username = u.get("username") or u.get("tg_username") or ""
+
+    link = user_link(tg_id, f"@{username}" if username else None)
+    ban_status = "🚫 Заблокирован" if banned else "✅ Активен"
+
+    lines = [
+        f"👤 <b>Карточка пользователя</b>",
+        f"",
+        f"🆔 ID: {link}",
+        f"📌 Статус: {ban_status}",
+        f"🗓 Зарегистрирован: {created_at}",
+        f"",
+        f"📋 <b>Профили ({len(profiles)}/{MAX_PROFILES_PER_USER}):</b>",
+    ]
+
+    if profiles:
+        for p in profiles:
+            name = html.escape(p["vpn_name"])
+            dis_icon = "⏸" if p.get("disabled") else "🟢"
+            peer_line = f"  {dis_icon} <b>{name}</b>"
+            if peers_info and name in peers_info:
+                pi = peers_info[name]
+                online = pi.get("online", False)
+                hs = fmt_handshake(pi.get("lastHandshake", 0))
+                rx = fmt_bytes(float(pi.get("traffic", {}).get("received", 0) or 0))
+                tx = fmt_bytes(float(pi.get("traffic", {}).get("sent", 0) or 0))
+                conn = "🟢" if online else "🔴"
+                peer_line += f" {conn} · ⬇{rx} ⬆{tx} · {hs}"
+            lines.append(peer_line)
+    else:
+        lines.append("  — нет профилей")
+
+    return "\n".join(lines)
 
 
 def kb_del_profile_confirm(profile_id: int, tg_id: int, page: int) -> InlineKeyboardMarkup:

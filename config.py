@@ -20,10 +20,17 @@ class Settings(BaseSettings):
     MINIAPP_PORT: int = 5000
     MINIAPP_DEV_MODE: bool = False
 
+    MINIAPP_URL: str = ""
+
     WEB_HOST: str = "0.0.0.0"
     WEB_PORT: int = 5001
 
     SHORT_LINK_DOMAIN: str = "dqpq.ru"
+
+    MAX_PROFILES_PER_USER: int = 3
+    MAX_KEY_PROFILES_PER_USER: int = 3
+
+    MTPROTO_LINKS: str = ""
 
     @field_validator("ADMIN_IDS", mode="before")
     @classmethod

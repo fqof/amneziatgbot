@@ -5,7 +5,11 @@ from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
 
-MAX_PROFILES_PER_USER = 3
+try:
+    from config import settings as _settings
+    MAX_PROFILES_PER_USER: int = _settings.MAX_PROFILES_PER_USER
+except Exception:
+    MAX_PROFILES_PER_USER: int = 3
 
 
 class Database:
@@ -13,7 +17,6 @@ class Database:
         self.db_path = db_path
         self.fernet = Fernet(encryption_key.encode("utf-8"))
         self._conn: Optional[aiosqlite.Connection] = None
-
 
     def _encrypt(self, data: str | None) -> str | None:
         if not data:
@@ -27,7 +30,6 @@ class Database:
             return self.fernet.decrypt(data.encode("utf-8")).decode("utf-8")
         except InvalidToken:
             return data
-
 
     async def _column_exists(self, table: str, column: str) -> bool:
         async with self._conn.execute(f"PRAGMA table_info({table})") as cur:
@@ -52,7 +54,6 @@ class Database:
             except Exception as e:
                 logger.warning("Не удалось добавить колонку %s.%s: %s", table, column, e)
         return False
-
 
     async def init(self):
         self._conn = await aiosqlite.connect(self.db_path)
@@ -80,6 +81,7 @@ class Database:
                 raw_response TEXT,
                 last_ip      TEXT,
                 disabled     INTEGER NOT NULL DEFAULT 0,
+                via_key      INTEGER NOT NULL DEFAULT 0,
                 created_at   TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
@@ -124,6 +126,7 @@ class Database:
         await self._add_column_if_missing("vpn_profiles", "disabled", "INTEGER NOT NULL DEFAULT 0")
         await self._add_column_if_missing("vpn_profiles", "last_ip", "TEXT")
         await self._add_column_if_missing("vpn_profiles", "raw_response", "TEXT")
+        await self._add_column_if_missing("vpn_profiles", "via_key", "INTEGER NOT NULL DEFAULT 0")
 
         if await self._table_exists("secret_keys"):
             await self._add_column_if_missing("secret_keys", "used_at", "TEXT")
@@ -207,15 +210,14 @@ class Database:
             await self._conn.close()
             logger.info("Database connection closed.")
 
-
     def _profile_row_to_dict(self, row: aiosqlite.Row) -> dict:
         d = dict(row)
         d["peer_id"] = self._decrypt(d.get("peer_id"))
         d["raw_response"] = self._decrypt(d.get("raw_response"))
         d["last_ip"] = self._decrypt(d.get("last_ip"))
         d["disabled"] = bool(d.get("disabled", 0))
+        d["via_key"] = bool(d.get("via_key", 0))
         return d
-
 
     async def ensure_user(self, telegram_id: int) -> None:
         await self._conn.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (telegram_id,))
@@ -234,7 +236,6 @@ class Database:
         async with self._conn.execute("SELECT telegram_id FROM users") as cur:
             return [r[0] for r in await cur.fetchall()]
 
-
     async def get_profiles(self, telegram_id: int) -> list[dict]:
         async with self._conn.execute("SELECT * FROM vpn_profiles WHERE telegram_id=? ORDER BY created_at", (telegram_id,)) as cur:
             return [self._profile_row_to_dict(r) for r in await cur.fetchall()]
@@ -250,25 +251,37 @@ class Database:
             return self._profile_row_to_dict(row) if row else None
 
     async def count_profiles(self, telegram_id: int) -> int:
-        async with self._conn.execute("SELECT COUNT(*) FROM vpn_profiles WHERE telegram_id=?", (telegram_id,)) as cur:
+        async with self._conn.execute(
+            "SELECT COUNT(*) FROM vpn_profiles WHERE telegram_id=? AND via_key=0", (telegram_id,)
+        ) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
 
-    async def can_create_profile(self, telegram_id: int) -> bool:
-        return await self.count_profiles(telegram_id) < MAX_PROFILES_PER_USER
+    async def count_key_profiles(self, telegram_id: int) -> int:
+        async with self._conn.execute(
+            "SELECT COUNT(*) FROM vpn_profiles WHERE telegram_id=? AND via_key=1", (telegram_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    async def can_create_profile(self, telegram_id: int, max_profiles: int) -> bool:
+        return await self.count_profiles(telegram_id) < max_profiles
+
+    async def can_create_key_profile(self, telegram_id: int, max_key_profiles: int) -> bool:
+        return await self.count_key_profiles(telegram_id) < max_key_profiles
 
     async def is_vpn_name_taken(self, vpn_name: str) -> bool:
         async with self._conn.execute("SELECT 1 FROM vpn_profiles WHERE vpn_name=?", (vpn_name,)) as cur:
             return await cur.fetchone() is not None
 
-    async def add_profile(self, telegram_id: int, vpn_name: str, peer_id: Optional[str], raw_response: str) -> int:
+    async def add_profile(self, telegram_id: int, vpn_name: str, peer_id: Optional[str], raw_response: str, via_key: bool = False) -> int:
         await self.ensure_user(telegram_id)
         cur = await self._conn.execute(
-            """INSERT INTO vpn_profiles (telegram_id, vpn_name, peer_id, raw_response) VALUES (?, ?, ?, ?)""",
-            (telegram_id, vpn_name, self._encrypt(peer_id), self._encrypt(raw_response)),
+            """INSERT INTO vpn_profiles (telegram_id, vpn_name, peer_id, raw_response, via_key) VALUES (?, ?, ?, ?, ?)""",
+            (telegram_id, vpn_name, self._encrypt(peer_id), self._encrypt(raw_response), 1 if via_key else 0),
         )
         await self._conn.commit()
-        logger.info("Added profile: tg=%d name=%s id=%d", telegram_id, vpn_name, cur.lastrowid)
+        logger.info("Added profile: tg=%d name=%s id=%d via_key=%s", telegram_id, vpn_name, cur.lastrowid, via_key)
         return cur.lastrowid
 
     async def delete_profile(self, profile_id: int) -> bool:
@@ -293,7 +306,6 @@ class Database:
     async def set_last_ip(self, profile_id: int, ip: str) -> None:
         await self._conn.execute("UPDATE vpn_profiles SET last_ip=? WHERE id=?", (self._encrypt(ip), profile_id))
         await self._conn.commit()
-
 
     async def get_all_users_with_profiles(self) -> list[dict]:
         async with self._conn.execute("SELECT * FROM users ORDER BY created_at DESC") as cur:
@@ -347,7 +359,6 @@ class Database:
             "created_at": row["created_at"],
             "profiles": profiles,
         }
-
 
     async def create_secret_key(self, telegram_id: int, key_value: str) -> int:
         await self.ensure_user(telegram_id)
@@ -404,7 +415,6 @@ class Database:
             if not row: return False
             keys = row.keys() if hasattr(row, "keys") else []
             return bool(row["key_blocked"]) if "key_blocked" in keys else False
-
 
     async def _cleanup_expired_short_links(self):
         try:
