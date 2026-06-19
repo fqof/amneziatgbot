@@ -65,7 +65,7 @@ bot/
 cd /root/bot
 
 # 2. Создать виртуальное окружение
-python3 -m venv /root/me
+python3 -m venv me
 source /root/me/bin/activate
 
 # 3. Установить зависимости
