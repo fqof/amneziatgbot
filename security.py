@@ -7,6 +7,8 @@ import logging
 from collections import defaultdict
 from flask import request, redirect, abort
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 _DB_PATH = "bans.db"
@@ -36,12 +38,14 @@ _RATE_WINDOW    = 10
 _404_LIMIT      = 10
 _404_WINDOW     = 60
 
+# IP-адреса, которые никогда не блокируются
 _WHITELIST_IPS: set[str] = {
     "127.0.0.1",
     "::1",
     "localhost",
 }
 
+# Пути, которые пропускаются до любых проверок
 _WHITELIST_PATHS_RE = re.compile(
     r"^/(favicon\.ico|robots\.txt|sitemap\.xml)$",
     re.IGNORECASE,
@@ -100,6 +104,10 @@ _INJECTION_RE = re.compile(
 _BINARY_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\xff]")
 
 
+# ---------------------------------------------------------------------------
+# БД
+# ---------------------------------------------------------------------------
+
 def _get_db() -> sqlite3.Connection:
     global _db_conn
     if _db_conn is None:
@@ -155,10 +163,15 @@ def _remove_expired_bans():
         db.commit()
 
 
+# ---------------------------------------------------------------------------
+# Утилиты
+# ---------------------------------------------------------------------------
+
 def _get_ip() -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if getattr(settings, "TRUST_PROXY_HEADERS", False):
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.remote_addr or "unknown"
 
 
@@ -171,6 +184,10 @@ def _path_entropy(path: str) -> float:
     length = len(path)
     return -sum((c / length) * math.log2(c / length) for c in freq.values())
 
+
+# ---------------------------------------------------------------------------
+# Блокировка
+# ---------------------------------------------------------------------------
 
 def _is_blocked(ip: str) -> bool:
     with _BLOCKED_LOCK:
@@ -200,6 +217,7 @@ def _block_ip(ip: str, reason: str = ""):
 
 
 def unblock_ip(ip: str):
+    """Ручная разблокировка IP (для админки или CLI)."""
     with _BLOCKED_LOCK:
         _BLOCKED_IPS.pop(ip, None)
         _BLOCK_STRIKES.pop(ip, None)
@@ -209,6 +227,10 @@ def unblock_ip(ip: str):
         db.commit()
     logger.info("IP %s разблокирован вручную", ip)
 
+
+# ---------------------------------------------------------------------------
+# Счётчики
+# ---------------------------------------------------------------------------
 
 def _record_and_check(
     store: dict,
@@ -236,6 +258,10 @@ def _is_404_flood(ip: str) -> bool:
     return _record_and_check(_404_STORE, _404_LOCK, ip, _404_LIMIT, _404_WINDOW)
 
 
+# ---------------------------------------------------------------------------
+# Классификация запроса
+# ---------------------------------------------------------------------------
+
 def _classify_request() -> str | None:
     ua       = request.headers.get("User-Agent", "")
     raw_path = request.environ.get("RAW_URI", "") or request.full_path or request.path
@@ -261,6 +287,10 @@ def _classify_request() -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Основной хук
+# ---------------------------------------------------------------------------
+
 def check_scanner(app, home_url: str = "/"):
     global _HOME_URL
     _HOME_URL = home_url
@@ -273,19 +303,24 @@ def check_scanner(app, home_url: str = "/"):
     def _guard():
         ip = _get_ip()
 
+        # 1. Белый список IP — пропускаем без проверок
         if ip in _WHITELIST_IPS:
             return
 
+        # 2. Белый список путей — пропускаем без проверок
         if _WHITELIST_PATHS_RE.match(request.path):
             return
 
+        # 3. Уже заблокирован?
         if _is_blocked(ip):
             abort(403)
 
+        # 4. Превышение частоты запросов
         if _is_rate_exceeded(ip):
             _block_ip(ip, "rate_limit")
             abort(429)
 
+        # 5. Классификация подозрительного запроса
         reason = _classify_request()
         if reason:
             if _is_scan_threshold(ip):

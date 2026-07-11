@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>⚠️ Ошибка</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+__SHARED_CSS__
+body { align-items: center; justify-content: center; }
+.box { text-align: center; padding: 40px 24px; display: flex; flex-direction: column; gap: 16px; }
+.emo { font-size: 52px; }
+.msg { color: var(--text3); font-size: 14px; line-height: 1.6; max-width: 300px; }
+.back { color: var(--green); font-size: 13px; text-decoration: none; }
+.back:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="emo">⚠️</div>
+  <p class="msg">__ERROR_MESSAGE__</p>
+  <a class="back btn btn-outline" href="/">← На главную</a>
+</div>
+<script>window.Telegram?.WebApp?.ready(); window.Telegram?.WebApp?.expand();</script>
+</body>
+</html>

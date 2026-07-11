@@ -37,7 +37,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger(__name__)
 
 MAX_INPUT_LENGTH = 4096
-VPN_NAME_RE = re.compile(r"^[a-zA-Z\u0430-\u044f\u0410-\u042f\u0451\u04010-9]+$")
+VPN_NAME_RE = re.compile(r"^[a-zA-Z\u0430-\u044f\u0410-\u042f\u0451\u04010-9]{1,16}$")
 
 _pending_deletes: dict[int, list[int]] = {}
 _delete_lock = asyncio.Lock()
@@ -468,7 +468,7 @@ async def cb_confirm_create(callback: CallbackQuery, state: FSMContext,
             tg_ref = f"@{safe_u}" if safe_u else html.escape(callback.from_user.first_name or "")
             msg = (
                 f"🆕 <b>Новый профиль</b>\n\n"
-                f"👤 {tg_ref} (ID: <code>{uid}</code>)\n"
+                f"👤 {tg_ref} (ID: {user_link(uid)})\n"
                 f"🔑 Имя: <b>{html.escape(name)}</b>"
             )
             for aid in settings.ADMIN_IDS:
@@ -747,7 +747,7 @@ async def cb_user_del_profile_do(callback: CallbackQuery, db: Database,
     tg_ref = f"@{safe_u}" if safe_u else html.escape(callback.from_user.first_name or "")
     msg = (
         f"🗑 <b>Профиль удалён</b>\n\n"
-        f"👤 {tg_ref} (ID: <code>{uid}</code>)\n"
+        f"👤 {tg_ref} (ID: {user_link(uid)})\n"
         f"🔑 Имя: <b>{html.escape(vpn_name)}</b>"
     )
     for aid in settings.ADMIN_IDS:

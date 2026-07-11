@@ -257,14 +257,7 @@ def kb_main(admin: bool = False) -> InlineKeyboardMarkup:
     rows.append([
         InlineKeyboardButton(
             text="🚀 Открыть меню",
-            web_app=WebAppInfo(url="https://pgkqawg.p1zda.ru/"),
-        ),
-    ])
-
-    rows.append([
-        InlineKeyboardButton(
-            text="🟢 Telegram без VPN",
-            url="tg://proxy?server=tg.p1zda.ru&port=7443&secret=ee6728938c788a91f18307dd069c96e91b6170692e6f7a6f6e2e7275",
+            web_app=WebAppInfo(url=getattr(settings, "MINIAPP_URL", "").strip() or "https://pgkqawg.fqof.ru/"),
         ),
     ])
 
@@ -441,7 +434,13 @@ def kb_user_card(tg_id: int, banned: bool, page: int, profiles: list[dict]) -> I
                 text="✉️ Написать",
                 callback_data=f"admin_msg_user:{tg_id}:{page}",
             ),
-        ]
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔗 Профиль в Telegram",
+                url=f"tg://user?id={tg_id}",
+            ),
+        ],
     ]
 
     for p in profiles:

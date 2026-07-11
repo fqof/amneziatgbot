@@ -28,7 +28,8 @@ class Database:
             return data
         try:
             return self.fernet.decrypt(data.encode("utf-8")).decode("utf-8")
-        except InvalidToken:
+        except (InvalidToken, ValueError, TypeError, UnicodeDecodeError) as e:
+            logger.warning("Failed to decrypt stored value (%s); returning raw value", type(e).__name__)
             return data
 
     async def _column_exists(self, table: str, column: str) -> bool:

@@ -83,7 +83,11 @@ def rate_limit(limit: int = 30, window: int = 60):
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
-            ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+            ip = (
+                request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                if getattr(settings, "TRUST_PROXY_HEADERS", False) and request.headers.get("X-Forwarded-For")
+                else (request.remote_addr or "unknown")
+            )
             key = f"{ip}:{request.endpoint}"
             if not _rate_limiter.is_allowed(key, limit, window):
                 logger.warning("Rate limit exceeded: %s -> %s", ip, request.endpoint)

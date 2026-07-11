@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIiBmb250LWZhbWlseT0ic2VyaWYiPvCfpK48L3RleHQ+PC9zdmc+">
+  <title>🤮 __VPN_NAME__ — FQof</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+__SHARED_CSS__
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <div class="logo">🤮</div>
+    <h1>FQof</h1>
+  </div>
+
+  <div class="ping-badge" role="status" aria-live="polite">
+    <div class="ping-dot" id="ping-dot"></div>
+    <span id="ping-text">проверка…</span>
+  </div>
+
+  <div class="card">
+    <div class="card-title success">📋 Профиль: __VPN_NAME__</div>
+
+    <div class="field">
+      <div class="label-row">
+        <label class="label">Строка конфигурации</label>
+        <button class="toggle-btn" id="cfg-toggle" onclick="toggleCfg()">Развернуть</button>
+      </div>
+      <div class="link-box" onclick="copyText(_config, '📋 Конфиг скопирован!')">
+        <span class="copy-hint">нажать для копирования</span>
+        <span id="cfg-text" class="truncate">__CONFIG_ESCAPED__</span>
+      </div>
+      <button class="btn btn-outline" onclick="copyText(_config, '📋 Конфиг скопирован!')">
+        📋 Скопировать vpn://
+      </button>
+    </div>
+
+    <div class="tg-section">
+      <button class="btn btn-tg" type="button" onclick="openTelegram()">✈️ Открыть в Telegram</button>
+    </div>
+
+    __INSTRUCTION_BLOCK__
+  </div>
+
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+  const _config = __CONFIG_JSON__;
+
+__SHARED_JS__
+
+  function toggleCfg() {
+    const t   = document.getElementById('cfg-text');
+    const btn = document.getElementById('cfg-toggle');
+    const isOpen = t.classList.toggle('open');
+    btn.textContent = isOpen ? 'Свернуть' : 'Развернуть';
+  }
+
+  fetchPing();
+  setInterval(fetchPing, 180_000);
+</script>
+</body>
+</html>

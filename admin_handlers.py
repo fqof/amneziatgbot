@@ -30,7 +30,7 @@ from shared import (
     kb_admin_panel, kb_admin_ban_menu, kb_cancel, kb_back, kb_back_to_panel,
     kb_admin_list, kb_user_card, kb_del_profile_confirm,
     kb_broadcast_confirm, kb_stats_refresh,
-    menu_text, kb_main,
+    menu_text, kb_main, user_link,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,8 @@ def _sanitize(text: str, max_len: int = 4096) -> str:
     return text[:max_len].strip()
 
 
+# ───────────────────────────── FSM ──────────────────────────────────
+
 class BroadcastStates(StatesGroup):
     waiting_for_text = State()
 
@@ -64,6 +66,8 @@ class SearchStates(StatesGroup):
 class MessageUserStates(StatesGroup):
     waiting_for_text = State()
 
+
+# ──────────────────────── Панель управления ──────────────────────────
 
 async def cb_admin_panel(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
     if not is_admin(callback.from_user.id):
@@ -91,6 +95,8 @@ async def cb_admin_panel(callback: CallbackQuery, db: Database, amnezia: Amnezia
     await callback.answer()
 
 
+# ──────────────────────── Список пользователей ───────────────────────
+
 async def cb_admin_list(callback: CallbackQuery, db: Database):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
@@ -109,6 +115,8 @@ async def cb_admin_list(callback: CallbackQuery, db: Database):
     )
     await callback.answer()
 
+
+# ──────────────────────── Карточка пользователя ──────────────────────
 
 async def cb_admin_user_card(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
     if not is_admin(callback.from_user.id):
@@ -138,6 +146,7 @@ async def cb_admin_user_card(callback: CallbackQuery, db: Database, amnezia: Amn
     created_at = user_data.get("created_at", "—")
     profiles = user_data.get("profiles", [])
 
+    # Получаем данные Amnezia для каждого профиля
     clients = await amnezia.get_all_clients()
 
     profile_lines = []
@@ -147,6 +156,7 @@ async def cb_admin_user_card(callback: CallbackQuery, db: Database, amnezia: Amn
         dis_tag = " ⏸" if dis else ""
         peer = find_peer_in_clients(clients, p["vpn_name"])
 
+        # Обновляем IP
         if peer:
             ep = peer.get("endpoint") or ""
             if ep:
@@ -189,7 +199,7 @@ async def cb_admin_user_card(callback: CallbackQuery, db: Database, amnezia: Amn
     await safe_edit(
         callback.message,
         f"👤 <b>Карточка пользователя</b>\n\n"
-        f"TG ID: <code>{tg_id}</code>\n"
+        f"TG ID: {user_link(tg_id)}\n"
         f"Статус: {account_status}\n"
         f"Зарегистрирован: {created_at}\n"
         f"Профилей: <b>{len(profiles)}/{MAX_PROFILES_PER_USER}</b>\n\n"
@@ -197,6 +207,8 @@ async def cb_admin_user_card(callback: CallbackQuery, db: Database, amnezia: Amn
         reply_markup=kb_user_card(tg_id, banned, page, profiles),
     )
 
+
+# ──────────────────────── Статистика (по telegram_id) ────────────────
 
 async def cb_admin_stats(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
     if not is_admin(callback.from_user.id):
@@ -217,10 +229,12 @@ async def cb_admin_stats(callback: CallbackQuery, db: Database, amnezia: Amnezia
     total_profiles = sum(len(u.get("profiles", [])) for u in users)
     online_cnt, total_peers = count_online_peers(clients)
 
+    # Считаем трафик по telegram_id
     traffic_by_tgid: dict[int, float] = {}
     total_rx = total_tx = 0.0
 
     if clients:
+        # Словарь vpn_name -> telegram_id
         name_to_tgid: dict[str, int] = {}
         for u in users:
             for p in u.get("profiles", []):
@@ -238,19 +252,20 @@ async def cb_admin_stats(callback: CallbackQuery, db: Database, amnezia: Amnezia
                 if tg_id:
                     traffic_by_tgid[tg_id] = traffic_by_tgid.get(tg_id, 0.0) + r + s
 
+    # Топ по трафику (telegram_id)
     top_users = sorted(traffic_by_tgid.items(), key=lambda x: x[1], reverse=True)
 
     now = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
 
     if page == 0:
         top_lines = "\n".join(
-            f"  {i+1}. <code>{tgid}</code> — {fmt_bytes(tb)}"
+            f"  {i+1}. {user_link(tgid)} — {fmt_bytes(tb)}"
             for i, (tgid, tb) in enumerate(top_users[:5])
         ) or "  нет данных"
 
         recent = users[:5]
         recent_lines = "\n".join(
-            f"  • <code>{u['telegram_id']}</code> · {len(u.get('profiles',[]))} проф. — {u.get('created_at', '—')}"
+            f"  • {user_link(u['telegram_id'])} · {len(u.get('profiles',[]))} проф. — {u.get('created_at', '—')}"
             for u in recent
         ) or "  нет данных"
 
@@ -269,7 +284,7 @@ async def cb_admin_stats(callback: CallbackQuery, db: Database, amnezia: Amnezia
     elif page == 1:
         chunk = top_users[:25]
         lines = "\n".join(
-            f"  {i+1}. <code>{tgid}</code> — {fmt_bytes(tb)}"
+            f"  {i+1}. {user_link(tgid)} — {fmt_bytes(tb)}"
             for i, (tgid, tb) in enumerate(chunk)
         ) or "  нет данных"
         text = (
@@ -281,7 +296,7 @@ async def cb_admin_stats(callback: CallbackQuery, db: Database, amnezia: Amnezia
         banned_list = [u for u in users if u.get("banned")]
         if banned_list:
             lines = "\n".join(
-                f"  • <code>{u['telegram_id']}</code>  "
+                f"  • {user_link(u['telegram_id'])}  "
                 f"({len(u.get('profiles',[]))} проф.)"
                 for u in banned_list[:30]
             )
@@ -313,12 +328,16 @@ async def cb_admin_stats(callback: CallbackQuery, db: Database, amnezia: Amnezia
     await safe_edit(callback.message, text, reply_markup=kb)
 
 
+# ──────────────────────── Статистика профиля ─────────────────────────
+
 async def cb_admin_profile_stat(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
+    """Детальная статистика конкретного профиля из карточки пользователя."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
 
     parts = callback.data.split(":")
+    # admin_profile_stat:{profile_id}:{tg_id}:{page}
     if len(parts) < 4:
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
@@ -373,7 +392,7 @@ async def cb_admin_profile_stat(callback: CallbackQuery, db: Database, amnezia: 
     await safe_edit(
         callback.message,
         f"📊 <b>Статистика профиля: {html.escape(vpn_name)}</b>\n\n"
-        f"TG ID владельца: <code>{tg_id}</code>\n"
+        f"TG ID владельца: {user_link(tg_id)}\n"
         f"Статус профиля: {status_text}\n"
         f"Создан: {created_at}\n"
         f"Последний IP: <code>{last_ip}</code>\n\n"
@@ -388,12 +407,16 @@ async def cb_admin_profile_stat(callback: CallbackQuery, db: Database, amnezia: 
     )
 
 
+# ──────────────────────── Отключение/включение профиля ───────────────
+
 async def cb_admin_toggle_profile(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
+    """Включить/отключить конкретный профиль пользователя."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
 
     parts = callback.data.split(":")
+    # admin_toggle_profile:{profile_id}:{tg_id}:{page}
     if len(parts) < 4:
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
@@ -416,13 +439,16 @@ async def cb_admin_toggle_profile(callback: CallbackQuery, db: Database, amnezia
     new_amnezia_status = "active" if currently_disabled else "disabled"
     action_text = "включён ✅" if currently_disabled else "отключён ⏸"
 
+    # Обновляем в Amnezia
     peer_id = profile.get("peer_id")
     api_ok = False
     if peer_id:
         api_ok = await amnezia.update_user(peer_id, status=new_amnezia_status)
 
+    # Обновляем в БД
     await db.set_profile_disabled(profile_id, new_disabled)
 
+    # Уведомляем пользователя
     try:
         notify_text = (
             f"✅ Ваш профиль <b>{html.escape(profile['vpn_name'])}</b> <b>восстановлен</b>."
@@ -436,6 +462,7 @@ async def cb_admin_toggle_profile(callback: CallbackQuery, db: Database, amnezia
     api_note = "" if api_ok else " <i>(только в БД)</i>"
     await callback.answer(f"Профиль {html.escape(profile['vpn_name'])}: {action_text}{api_note}")
 
+    # Обновляем карточку
     user_data = await db.get_user(tg_id)
     if not user_data:
         return
@@ -450,7 +477,7 @@ async def cb_admin_toggle_profile(callback: CallbackQuery, db: Database, amnezia
     await safe_edit(
         callback.message,
         f"👤 <b>Карточка пользователя</b>\n\n"
-        f"TG ID: <code>{tg_id}</code>\n"
+        f"TG ID: {user_link(tg_id)}\n"
         f"Статус: {account_status}\n"
         f"Зарегистрирован: {user_data.get('created_at', '—')}\n"
         f"Профилей: <b>{len(profiles)}/{MAX_PROFILES_PER_USER}</b>\n\n"
@@ -494,12 +521,16 @@ def _build_profile_lines(profiles: list[dict], clients: dict | None) -> list[str
     return lines
 
 
+# ──────────────────────── Удаление профиля ───────────────────────────
+
 async def cb_admin_del_profile(callback: CallbackQuery, db: Database):
+    """Запрос подтверждения удаления профиля."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
 
     parts = callback.data.split(":")
+    # admin_del_profile:{profile_id}:{tg_id}:{page}
     if len(parts) < 4:
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
@@ -518,7 +549,7 @@ async def cb_admin_del_profile(callback: CallbackQuery, db: Database):
         callback.message,
         f"🗑 <b>Удаление профиля</b>\n\n"
         f"Профиль: <b>{html.escape(vpn_name)}</b>\n"
-        f"TG ID: <code>{tg_id}</code>\n\n"
+        f"TG ID: {user_link(tg_id)}\n\n"
         f"⚠️ Пир будет удалён из Amnezia.",
         reply_markup=kb_del_profile_confirm(profile_id, tg_id, page),
     )
@@ -526,11 +557,13 @@ async def cb_admin_del_profile(callback: CallbackQuery, db: Database):
 
 
 async def cb_admin_del_profile_do(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
+    """Фактическое удаление профиля."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
 
     parts = callback.data.split(":")
+    # admin_del_profile_do:{profile_id}:{tg_id}:{page}
     if len(parts) < 4:
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
@@ -571,6 +604,7 @@ async def cb_admin_del_profile_do(callback: CallbackQuery, db: Database, amnezia
 
         api_note = "" if api_ok else "\n<i>(Пир не найден в Amnezia — удалён только из БД)</i>"
 
+        # Возвращаем обновлённую карточку
         user_data = await db.get_user(tg_id)
         if user_data:
             banned = user_data.get("banned", False)
@@ -584,13 +618,14 @@ async def cb_admin_del_profile_do(callback: CallbackQuery, db: Database, amnezia
                 callback.message,
                 f"✅ Профиль <b>{html.escape(vpn_name)}</b> удалён.{api_note}\n\n"
                 f"👤 <b>Карточка пользователя</b>\n\n"
-                f"TG ID: <code>{tg_id}</code>\n"
+                f"TG ID: {user_link(tg_id)}\n"
                 f"Статус: {account_status}\n"
                 f"Профилей: <b>{len(profiles)}/{MAX_PROFILES_PER_USER}</b>\n\n"
                 f"<b>📋 Профили:</b>\n{profiles_block}",
                 reply_markup=kb_user_card(tg_id, banned, page, profiles),
             )
         else:
+            # Пользователь без профилей — возвращаемся в список
             users = await db.get_all_users_with_profiles()
             total_pgs = max(1, ceil(len(users) / PAGE_SIZE))
             page = min(page, total_pgs - 1)
@@ -606,6 +641,8 @@ async def cb_admin_del_profile_do(callback: CallbackQuery, db: Database, amnezia
         logger.error("Ошибка удаления профиля: %s", e)
         await safe_edit(callback.message, "❌ Ошибка при удалении.", reply_markup=kb_back_to_panel())
 
+
+# ──────────────────────── Все пиры Amnezia ────────────────────────────
 
 async def cb_admin_all_peers(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
     if not is_admin(callback.from_user.id):
@@ -659,6 +696,8 @@ async def cb_admin_all_peers(callback: CallbackQuery, db: Database, amnezia: Amn
         ]),
     )
 
+
+# ──────────────────────── Поиск ──────────────────────────────────────
 
 async def cb_admin_search(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -729,7 +768,7 @@ async def process_search_query(message: Message, state: FSMContext, db: Database
         banned_tag = "  🚫" if u.get("banned") else ""
         profile_names = ", ".join(p["vpn_name"] for p in u.get("profiles", [])) or "—"
         rows_text.append(
-            f"• <code>{u['telegram_id']}</code>{banned_tag}\n"
+            f"• {user_link(u['telegram_id'])}{banned_tag}\n"
             f"  Профили: <b>{html.escape(profile_names)}</b>\n"
             f"  C: {u.get('created_at', '—')}"
         )
@@ -753,12 +792,15 @@ async def process_search_query(message: Message, state: FSMContext, db: Database
     )
 
 
+# ──────────────────────── Бан / разбан ───────────────────────────────
+
 async def cb_admin_ban_toggle(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
 
     parts = callback.data.split(":")
+    # admin_ban_toggle:{tg_id}:{page}
     if len(parts) < 3:
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
@@ -774,6 +816,7 @@ async def cb_admin_ban_toggle(callback: CallbackQuery, db: Database, amnezia: Am
     new_status_amnezia = "active" if currently_banned else "disabled"
     action_text = "разбанен ✅" if currently_banned else "заблокирован 🚫"
 
+    # Обновляем все профили в Amnezia
     profiles = await db.get_profiles(tg_id)
     api_ok = True
     for p in profiles:
@@ -808,6 +851,8 @@ async def cb_admin_ban_toggle(callback: CallbackQuery, db: Database, amnezia: Am
         reply_markup=kb_admin_list(users_page, page, total_pgs),
     )
 
+
+# ──────────────────────── Подменю блокировок ─────────────────────────
 
 async def cb_admin_ban_menu(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -902,12 +947,15 @@ async def cb_admin_unban_all_do(callback: CallbackQuery, db: Database, amnezia: 
     )
 
 
+# ──────────────────────── Личное сообщение пользователю ──────────────
+
 async def cb_admin_msg_user(callback: CallbackQuery, state: FSMContext, db: Database):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
 
     parts = callback.data.split(":")
+    # admin_msg_user:{tg_id}:{page}
     if len(parts) < 3:
         await callback.answer("❌ Некорректные данные.", show_alert=True)
         return
@@ -932,7 +980,7 @@ async def cb_admin_msg_user(callback: CallbackQuery, state: FSMContext, db: Data
     await safe_edit(
         callback.message,
         f"✉️ <b>Сообщение пользователю</b>\n\n"
-        f"TG ID: <code>{tg_id}</code>\n\n"
+        f"TG ID: {user_link(tg_id)}\n\n"
         f"Введите текст сообщения:",
         reply_markup=kb_cancel(),
     )
@@ -974,10 +1022,10 @@ async def process_msg_user_text(message: Message, state: FSMContext):
 
     try:
         await bot.send_message(tg_id, text, parse_mode=ParseMode.HTML)
-        result_text = f"✅ Сообщение отправлено пользователю <code>{tg_id}</code>."
+        result_text = f"✅ Сообщение отправлено пользователю {user_link(tg_id)}."
     except Exception as e:
         logger.error("Ошибка отправки сообщения %d: %s", tg_id, e)
-        result_text = f"❌ Не удалось отправить сообщение <code>{tg_id}</code>."
+        result_text = f"❌ Не удалось отправить сообщение {user_link(tg_id)}."
 
     if menu_msg_id:
         try:
@@ -999,6 +1047,8 @@ async def process_msg_user_text(message: Message, state: FSMContext):
 
     await bot.send_message(chat_id, result_text, parse_mode=ParseMode.HTML)
 
+
+# ──────────────────────── Рассылка ───────────────────────────────────
 
 async def cb_admin_broadcast(callback: CallbackQuery, state: FSMContext, db: Database):
     if not is_admin(callback.from_user.id):
@@ -1109,6 +1159,8 @@ async def cb_admin_broadcast_do(callback: CallbackQuery, state: FSMContext, db: 
     await state.update_data(menu_msg_id=callback.message.message_id)
 
 
+# ──────────────────────── Экспорт CSV ────────────────────────────────
+
 async def cb_admin_export_csv(callback: CallbackQuery, state: FSMContext, db: Database):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
@@ -1143,9 +1195,15 @@ async def cb_admin_export_csv(callback: CallbackQuery, state: FSMContext, db: Da
     await push_side_msg(state, sent.message_id)
 
 
+# ──────────────────────── Управление секретными ключами ──────────────
+
 async def _delete_user_profiles_from_amnezia(
     tg_id: int, db: Database, amnezia: AmneziaClient
 ) -> tuple[int, int]:
+    """
+    Удаляет все VPN-профили пользователя из Amnezia API и из БД.
+    Возвращает (успешно_удалено, ошибок).
+    """
     profiles = await db.get_profiles(tg_id)
     ok = fail = 0
     for p in profiles:
@@ -1162,6 +1220,7 @@ async def _delete_user_profiles_from_amnezia(
 
 
 async def cb_admin_keys(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
+    """Список всех секретных ключей."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
@@ -1189,7 +1248,7 @@ async def cb_admin_keys(callback: CallbackQuery, db: Database, amnezia: AmneziaC
         revoked = " 🚫 отозван" if k.get("revoked") else ""
         created = k.get("created_at", "—")[:10]
         lines.append(
-            f"• <code>{tg_id}</code> — <code>{html.escape(key_short)}</code>"
+            f"• {user_link(tg_id)} — <code>{html.escape(key_short)}</code>"
             f"\n  {used}{revoked} · {created}"
         )
 
@@ -1219,6 +1278,7 @@ async def cb_admin_keys(callback: CallbackQuery, db: Database, amnezia: AmneziaC
 
 
 async def cb_admin_key_revoke(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
+    """Отзыв конкретного ключа + удаление всех VPN-профилей пользователя."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
@@ -1237,6 +1297,7 @@ async def cb_admin_key_revoke(callback: CallbackQuery, db: Database, amnezia: Am
 
     ok = await db.revoke_secret_key(key_id)
     if ok:
+        # Удаляем все VPN-профили пользователя из Amnezia и БД
         deleted_ok, deleted_fail = await _delete_user_profiles_from_amnezia(tg_id, db, amnezia)
         note = f" Профилей удалено: {deleted_ok}" + (f", ошибок: {deleted_fail}" if deleted_fail else "")
         await callback.answer(f"✅ Ключ пользователя {tg_id} отозван.{note}", show_alert=bool(deleted_ok or deleted_fail))
@@ -1253,10 +1314,13 @@ async def cb_admin_key_revoke(callback: CallbackQuery, db: Database, amnezia: Am
     else:
         await callback.answer("❌ Ключ не найден.")
 
+    # Перезагружаем список
     await cb_admin_keys(callback, db, amnezia)
 
 
 async def cb_admin_key_block(callback: CallbackQuery, db: Database, amnezia: AmneziaClient):
+    """Блокирует/разблокирует возможность создавать ключи для пользователя.
+    При блокировке — удаляет все VPN-профили пользователя."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа.", show_alert=True)
         return
@@ -1272,9 +1336,10 @@ async def cb_admin_key_block(callback: CallbackQuery, db: Database, amnezia: Amn
         return
 
     currently_blocked = await db.get_user_key_blocked(tg_id)
-    await db.set_user_can_create_key(tg_id, currently_blocked)
+    await db.set_user_can_create_key(tg_id, currently_blocked)  # инвертируем
 
     if not currently_blocked:
+        # Блокируем — удаляем все профили
         deleted_ok, deleted_fail = await _delete_user_profiles_from_amnezia(tg_id, db, amnezia)
         note = f" Профилей удалено: {deleted_ok}" + (f", ошибок: {deleted_fail}" if deleted_fail else "")
         action = f"🔒 Создание ключей запрещено.{note}"
@@ -1302,11 +1367,15 @@ async def cb_admin_key_block(callback: CallbackQuery, db: Database, amnezia: Amn
     await cb_admin_keys(callback, db, amnezia)
 
 
+# ──────────────────────── Регистрация ────────────────────────────────
+
 def register_admin_handlers(dp: Dispatcher) -> None:
+    # FSM
     dp.message.register(process_broadcast_text, BroadcastStates.waiting_for_text, F.text)
     dp.message.register(process_search_query,   SearchStates.waiting_for_query,    F.text)
     dp.message.register(process_msg_user_text,  MessageUserStates.waiting_for_text, F.text)
 
+    # Callback-кнопки
     dp.callback_query.register(cb_admin_panel,             F.data == "admin_panel")
     dp.callback_query.register(cb_admin_list,              F.data.startswith("admin_list:"))
     dp.callback_query.register(cb_admin_user_card,         F.data.startswith("admin_user_card:"))

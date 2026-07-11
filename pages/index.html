@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIiBmb250LWZhbWlseT0ic2VyaWYiPvCfpK48L3RleHQ+PC9zdmc+">
+<title>🤮 FQof</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+__SHARED_CSS__
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="logo">🤮</div>
+    <h1>FQof</h1>
+    <p>Введите ключ для получения конфигурации</p>
+  </div>
+
+  <div class="ping-badge" role="status" aria-live="polite">
+    <div class="ping-dot" id="ping-dot"></div>
+    <span id="ping-text">проверка…</span>
+  </div>
+
+  <div class="error-card" id="error-card" role="alert" aria-live="assertive"></div>
+
+  <div id="main-content" style="width:100%">
+    <div class="card" id="form-card">
+      <div class="card-title">Авторизация</div>
+      <div class="field">
+        <label class="label" for="key-input">Ключ доступа</label>
+        <input class="input" id="key-input" type="text"
+               placeholder="32 символа" maxlength="32"
+               autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+               inputmode="text" aria-describedby="key-hint">
+        <span class="hint" id="key-hint">Ключ выдаётся индивидуально</span>
+      </div>
+      <div class="field">
+        <label class="label" for="name-input">Имя профиля</label>
+        <input class="input" id="name-input" type="text"
+               placeholder="например: phone" maxlength="16"
+               autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+               aria-describedby="name-hint">
+        <span class="hint" id="name-hint">До 16 символов, только буквы и цифры</span>
+      </div>
+      <button class="btn btn-primary" id="connect-btn" onclick="doConnect()">
+        Получить конфигурацию
+      </button>
+    </div>
+  </div>
+
+  <div class="tg-section">
+    <button class="btn btn-tg" type="button" onclick="openTelegram()" style="max-width:420px; width:100%;">✈️ Открыть в Telegram</button>
+    <button class="btn btn-outline" onclick="window.location.href='https://tg.fqof.ru/'" style="max-width:420px; width:100%; margin-top:10px;">🤳🏻Telegram без VPN</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+  const DYNAMIC_TOKEN = '__DYNAMIC_TOKEN__';
+
+  let _config = '', _shortLink = '';
+
+__SHARED_JS__
+
+  const showError = (msg) => {
+    const el = document.getElementById('error-card');
+    if (!msg) { el.classList.remove('show'); el.textContent = ''; return; }
+    el.textContent = msg;
+    el.classList.add('show');
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+
+  const toggleConfig = () => {
+    const t = document.getElementById('config-text');
+    const btn = document.getElementById('cfg-toggle');
+    const isOpen = t.classList.toggle('open');
+    btn.textContent = isOpen ? 'Свернуть' : 'Развернуть';
+  };
+
+  async function doConnect() {
+    showError(false);
+    const key  = document.getElementById('key-input').value.trim();
+    const name = document.getElementById('name-input').value.trim();
+    const btn  = document.getElementById('connect-btn');
+    const keyInput = document.getElementById('key-input');
+    const nameInput = document.getElementById('name-input');
+    keyInput.setAttribute('aria-invalid', 'false');
+    nameInput.setAttribute('aria-invalid', 'false');
+
+    if (!key)  { keyInput.setAttribute('aria-invalid', 'true'); keyInput.focus(); return showError('Введите ключ'); }
+    if (!/^[A-Za-z0-9]{32}$/.test(key)) { keyInput.setAttribute('aria-invalid', 'true'); keyInput.focus(); return showError('Ключ должен содержать ровно 32 латинские буквы или цифры'); }
+    if (!name) { nameInput.setAttribute('aria-invalid', 'true'); nameInput.focus(); return showError('Введите имя профиля'); }
+    if (!/^[a-zA-Zа-яА-ЯёЁ0-9]{1,16}$/.test(name)) {
+      nameInput.setAttribute('aria-invalid', 'true'); nameInput.focus();
+      return showError('Имя: только буквы и цифры, до 16 символов');
+    }
+
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'Подключаю…';
+
+    try {
+      const resp = await fetch('/connect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Dynamic-Token': DYNAMIC_TOKEN,
+        },
+        body: JSON.stringify({ key, name }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || 'Ошибка сервера');
+
+      _config    = data.config;
+      _shortLink = data.short_link;
+
+      document.getElementById('main-content').innerHTML = `
+        <div class="card" id="result-block">
+          <div class="card-title success">Конфигурация:</div>
+
+          <div class="field">
+            <div class="label-row">
+              <label class="label">Строка vpn://</label>
+              <button class="toggle-btn" id="cfg-toggle" onclick="toggleConfig()">Развернуть</button>
+            </div>
+            <div class="link-box" onclick="copyText(_config, '📋 Конфиг скопирован!')">
+              <span class="copy-hint">нажать для копирования</span>
+              <span id="config-text" class="truncate"></span>
+            </div>
+            <button class="btn btn-outline" onclick="copyText(_config, '📋 Конфиг скопирован!')">
+              📋 Скопировать vpn://
+            </button>
+          </div>
+
+          <div class="field">
+            <label class="label">Короткая ссылка (на 24 часа)</label>
+            <div class="link-box" onclick="copyText(_shortLink, '🔗 Ссылка скопирована!')">
+              <span class="copy-hint">нажать для копирования</span>
+              <span id="short-link-text"></span>
+            </div>
+            <button class="btn btn-outline" onclick="copyText(_shortLink, '🔗 Ссылка скопирована!')">
+              📋 Скопировать ссылку
+            </button>
+          </div>
+
+          __INSTRUCTION_BLOCK__
+        </div>
+      `;
+
+      document.getElementById('config-text').textContent = _config;
+      document.getElementById('short-link-text').textContent = _shortLink;
+      window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    } catch (e) {
+      showError(e.message === 'Failed to fetch'
+        ? 'Сетевая ошибка. Попробуйте ещё раз.'
+        : e.message);
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.removeAttribute('aria-busy');
+      btn.textContent = 'Получить конфигурацию';
+    }
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.isComposing && document.getElementById('key-input')) doConnect();
+  });
+
+  fetchPing();
+  setInterval(fetchPing, 180_000);
+</script>
+</body>
+</html>

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     AMNEZIA_API_URL: str = "http://127.0.0.1:4001"
     AMNEZIA_API_KEY: str
     AMNEZIA_PROTOCOL: str = "amneziawg2"
+    AMNEZIA_VERIFY_SSL: bool = True
 
     DB_PATH: str = "./bot_data.db"
     DB_ENCRYPTION_KEY: str
@@ -26,6 +27,10 @@ class Settings(BaseSettings):
     WEB_PORT: int = 5001
 
     SHORT_LINK_DOMAIN: str = "dqpq.ru"
+
+    # Only trust X-Forwarded-For when the app truly sits behind a reverse proxy
+    # that overwrites/strips this header for external clients.
+    TRUST_PROXY_HEADERS: bool = False
 
     MAX_PROFILES_PER_USER: int = 3
     MAX_KEY_PROFILES_PER_USER: int = 3
